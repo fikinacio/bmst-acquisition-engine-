@@ -1,0 +1,469 @@
+{
+  "name": "03 — WhatsApp Router",
+  "nodes": [
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-router",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a3000001-0003-0003-0003-000000000001",
+      "name": "Webhook — Evolution API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f-event-type",
+              "name": "event_type",
+              "value": "={{ $json.body?.event ?? $json.event ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-remote-jid",
+              "name": "raw_remote_jid",
+              "value": "={{ $json.body?.data?.key?.remoteJid ?? $json.data?.key?.remoteJid ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-from-me",
+              "name": "from_me",
+              "value": "={{ $json.body?.data?.key?.fromMe ?? $json.data?.key?.fromMe ?? false }}",
+              "type": "boolean"
+            },
+            {
+              "id": "f-message-type",
+              "name": "message_type",
+              "value": "={{ $json.body?.data?.messageType ?? $json.data?.messageType ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-push-name",
+              "name": "push_name",
+              "value": "={{ $json.body?.data?.pushName ?? $json.data?.pushName ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-message-obj",
+              "name": "raw_message_obj",
+              "value": "={{ $json.body?.data?.message ?? $json.data?.message ?? {} }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a3000001-0003-0003-0003-000000000002",
+      "name": "Set — Extract Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [480, 300]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\n// Skip non-message events (connection updates, status changes, etc.)\nconst eventType = item.event_type || '';\nif (eventType && eventType !== 'messages.upsert') {\n  return [];\n}\n\n// Skip messages the bot sent itself\nif (item.from_me === true) {\n  return [];\n}\n\n// Extract readable text from conversation, extended text, or image caption\nconst msgObj = item.raw_message_obj || {};\nconst messageText = (\n  msgObj.conversation ||\n  (msgObj.extendedTextMessage && msgObj.extendedTextMessage.text) ||\n  (msgObj.imageMessage && msgObj.imageMessage.caption) ||\n  ''\n).trim();\n\n// Skip non-text messages (audio, video, stickers, reactions)\nif (!messageText) {\n  return [];\n}\n\n// --- Normalise remoteJid ---\n// Strip @lid (experimental JID format) and replace with standard domain\nlet jid = (item.raw_remote_jid || '').trim();\njid = jid.replace(/@lid$/, '@s.whatsapp.net');\n// Strip multi-device suffix, e.g. 244912345678:5@s.whatsapp.net\njid = jid.replace(/:\\d+@s\\.whatsapp\\.net$/, '@s.whatsapp.net');\n// Add domain if somehow missing\nif (!jid.includes('@')) {\n  jid = jid + '@s.whatsapp.net';\n}\n\n// Numeric-only phone number for Airtable lookup (no plus sign, no spaces)\nconst whatsapp_number = jid.split('@')[0].replace(/\\D/g, '');\n\nreturn [{\n  json: {\n    event_type: item.event_type,\n    push_name: item.push_name,\n    raw_remote_jid: item.raw_remote_jid,\n    remote_jid: jid,\n    whatsapp_number: whatsapp_number,\n    message_text: messageText,\n    message_type: item.message_type\n  }\n}];"
+      },
+      "id": "a3000001-0003-0003-0003-000000000003",
+      "name": "Code — Normalise remoteJid",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+
+    {
+      "parameters": {
+        "operation": "list",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "companies",
+          "mode": "name"
+        },
+        "filterByFormula": "={{ \"{whatsapp_number}='\" + $json.whatsapp_number + \"'\" }}",
+        "returnAll": false,
+        "limit": 1,
+        "options": {
+          "fields": [
+            "company_name",
+            "contact_name",
+            "whatsapp_number",
+            "sector",
+            "state",
+            "conversation_stage",
+            "team_size",
+            "main_challenge",
+            "priority_process",
+            "urgency_level",
+            "qualification_score"
+          ]
+        }
+      },
+      "id": "a3000001-0003-0003-0003-000000000004",
+      "name": "Airtable — Lookup Company",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [960, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-record-found",
+              "leftValue": "={{ ($json.records?.length ?? 0) > 0 || ($json.id !== undefined && $json.id !== '') }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            },
+            {
+              "id": "cond-active-state",
+              "leftValue": "={{ (['prospect','contacted','lead','qualification'].includes($json.records?.[0]?.fields?.state ?? $json.fields?.state ?? '')) || (($json.records?.[0]?.fields?.state ?? $json.fields?.state ?? '') === 'nurture' && ($json.records?.[0]?.fields?.conversation_stage ?? $json.fields?.conversation_stage ?? '') === 'requalify') }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3000001-0003-0003-0003-000000000005",
+      "name": "IF — Active State?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.FASTAPI_BASE_URL }}/qualify",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "company_record",
+              "value": "={{ $('Airtable — Lookup Company').first().json.records?.[0] ?? { id: $('Airtable — Lookup Company').first().json.id, fields: $('Airtable — Lookup Company').first().json.fields } }}"
+            },
+            {
+              "name": "incoming_message",
+              "value": "={{ $('Code — Normalise remoteJid').first().json.message_text }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": { "responseFormat": "json" }
+          }
+        }
+      },
+      "id": "a3000001-0003-0003-0003-000000000006",
+      "name": "HTTP — POST /qualify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1440, 300]
+    },
+
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f-reply-text",
+              "name": "reply_text",
+              "value": "={{ $json.reply_text ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-new-state",
+              "name": "new_state",
+              "value": "={{ $json.new_state ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-new-stage",
+              "name": "new_stage",
+              "value": "={{ $json.new_stage ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-updates",
+              "name": "updates",
+              "value": "={{ $json.updates ?? {} }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a3000001-0003-0003-0003-000000000007",
+      "name": "Set — Parse Bot Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1680, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.EVOLUTION_API_URL }}/message/sendText/{{ $vars.EVOLUTION_INSTANCE }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $vars.EVOLUTION_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $('Code — Normalise remoteJid').first().json.whatsapp_number }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $('Set — Parse Bot Response').first().json.reply_text }}"
+            },
+            {
+              "name": "delay",
+              "value": "=1500"
+            }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "a3000001-0003-0003-0003-000000000008",
+      "name": "HTTP — Evolution API Send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1920, 300]
+    },
+
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "companies",
+          "mode": "name"
+        },
+        "id": "={{ $('Airtable — Lookup Company').first().json.records?.[0]?.id ?? $('Airtable — Lookup Company').first().json.id }}",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "state": "={{ $('Set — Parse Bot Response').first().json.new_state }}",
+            "conversation_stage": "={{ $('Set — Parse Bot Response').first().json.new_stage }}",
+            "last_activity_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": ["id"],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a3000001-0003-0003-0003-000000000009",
+      "name": "Airtable — Update Company",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [2160, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "interactions",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "company": "={{ [$('Airtable — Lookup Company').first().json.records?.[0]?.id ?? $('Airtable — Lookup Company').first().json.id] }}",
+            "type": "qualification",
+            "agent": "bot",
+            "message_text": "={{ $('Code — Normalise remoteJid').first().json.message_text }}",
+            "timestamp": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a3000001-0003-0003-0003-000000000010",
+      "name": "Airtable — Log Interaction",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [2400, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-advanced-state",
+              "leftValue": "={{ ['audit_scheduled','audit_completed','proposal_sent'].includes($json.records?.[0]?.fields?.state ?? $json.fields?.state ?? '') }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3000001-0003-0003-0003-000000000011",
+      "name": "IF — Advanced State?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1440, 520]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ '*BMST — Resposta manual necessária* :telephone_receiver:\\n\\n*Empresa:* ' + ($('Airtable — Lookup Company').first().json.records?.[0]?.fields?.company_name ?? $('Airtable — Lookup Company').first().json.fields?.company_name ?? '?') + '\\n*Estado:* ' + ($('Airtable — Lookup Company').first().json.records?.[0]?.fields?.state ?? $('Airtable — Lookup Company').first().json.fields?.state ?? '?') + '\\n*Contacto:* ' + ($('Airtable — Lookup Company').first().json.records?.[0]?.fields?.contact_name ?? $('Airtable — Lookup Company').first().json.fields?.contact_name ?? '?') + '\\n*WhatsApp:* +' + $('Code — Normalise remoteJid').first().json.whatsapp_number + '\\n*Mensagem:* \"' + $('Code — Normalise remoteJid').first().json.message_text + '\"' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a3000001-0003-0003-0003-000000000012",
+      "name": "HTTP — Slack Notify Fidel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1680, 520]
+    },
+
+    {
+      "parameters": {},
+      "id": "a3000001-0003-0003-0003-000000000013",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 700]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.N8N_WEBHOOK_BASE_URL + '/webhook/error-handler' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "workflow_name", "value": "03 — WhatsApp Router" },
+            { "name": "node_name",     "value": "={{ $json.execution?.lastNodeExecuted ?? 'unknown' }}" },
+            { "name": "error_message", "value": "={{ $json.error?.message ?? $json.message ?? 'unknown error' }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a3000001-0003-0003-0003-000000000014",
+      "name": "Forward to Workflow 05",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [480, 700]
+    }
+
+  ],
+
+  "connections": {
+    "Webhook — Evolution API": {
+      "main": [[{ "node": "Set — Extract Fields", "type": "main", "index": 0 }]]
+    },
+    "Set — Extract Fields": {
+      "main": [[{ "node": "Code — Normalise remoteJid", "type": "main", "index": 0 }]]
+    },
+    "Code — Normalise remoteJid": {
+      "main": [[{ "node": "Airtable — Lookup Company", "type": "main", "index": 0 }]]
+    },
+    "Airtable — Lookup Company": {
+      "main": [[{ "node": "IF — Active State?", "type": "main", "index": 0 }]]
+    },
+    "IF — Active State?": {
+      "main": [
+        [{ "node": "HTTP — POST /qualify",   "type": "main", "index": 0 }],
+        [{ "node": "IF — Advanced State?",   "type": "main", "index": 0 }]
+      ]
+    },
+    "HTTP — POST /qualify": {
+      "main": [[{ "node": "Set — Parse Bot Response", "type": "main", "index": 0 }]]
+    },
+    "Set — Parse Bot Response": {
+      "main": [[{ "node": "HTTP — Evolution API Send", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Evolution API Send": {
+      "main": [[{ "node": "Airtable — Update Company", "type": "main", "index": 0 }]]
+    },
+    "Airtable — Update Company": {
+      "main": [[{ "node": "Airtable — Log Interaction", "type": "main", "index": 0 }]]
+    },
+    "IF — Advanced State?": {
+      "main": [
+        [{ "node": "HTTP — Slack Notify Fidel", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Forward to Workflow 05", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "id": "wf-bmst-03-whatsapp-router"
+}

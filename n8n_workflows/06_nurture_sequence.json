@@ -1,0 +1,473 @@
+{
+  "name": "06 — Nurture Sequence",
+
+  "nodes": [
+
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 8 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "a6000001-0006-0006-0006-000000000001",
+      "name": "Schedule — 09:30 WAT Mon–Fri",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+
+    {
+      "parameters": {
+        "operation": "list",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "companies",
+          "mode": "name"
+        },
+        "filterByFormula": "{state}='nurture'",
+        "returnAll": true,
+        "options": {
+          "fields": [
+            "company_name",
+            "contact_name",
+            "whatsapp_number",
+            "sector",
+            "conversation_stage",
+            "team_size",
+            "main_challenge",
+            "priority_process",
+            "urgency_level",
+            "qualification_score",
+            "last_activity_at",
+            "no_response_count"
+          ]
+        }
+      },
+      "id": "a6000001-0006-0006-0006-000000000002",
+      "name": "Airtable — Get Nurture Companies",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// Normalise Airtable response: may be {records:[...]} or one item per record\nconst inputs = $input.all();\nlet records = [];\nfor (const item of inputs) {\n  const data = item.json;\n  if (Array.isArray(data.records)) {\n    records.push(...data.records);\n  } else if (data.id) {\n    records.push(data);\n  }\n}\nif (records.length === 0) return [];\nreturn records.map(r => ({ json: r }));"
+      },
+      "id": "a6000001-0006-0006-0006-000000000003",
+      "name": "Code — Split Records",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
+    },
+
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "a6000001-0006-0006-0006-000000000004",
+      "name": "Split in Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [960, 300]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst id = item.id || '';\nconst fields = item.fields || {};\n\nconst lastActivity = fields.last_activity_at ? new Date(fields.last_activity_at) : null;\nconst now = new Date();\nconst daysSince = lastActivity\n  ? Math.floor((now.getTime() - lastActivity.getTime()) / (1000 * 60 * 60 * 24))\n  : 999;\n\n// ±1-day window per touch to absorb weekend scheduler gaps\nlet touch_type = 'skip';\nif (daysSince >= 13 && daysSince <= 15)      { touch_type = 'nurture_touch_1'; }\nelse if (daysSince >= 29 && daysSince <= 31)  { touch_type = 'nurture_touch_2'; }\nelse if (daysSince >= 59 && daysSince <= 61)  { touch_type = 'nurture_touch_3'; }\nelse if (daysSince >= 74 && daysSince <= 76)  { touch_type = 'requalify'; }\n\nreturn [{ json: { id, fields, touch_type, days_since: daysSince } }];"
+      },
+      "id": "a6000001-0006-0006-0006-000000000005",
+      "name": "Code — Determine Touch Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-touch-due",
+              "leftValue": "={{ $json.touch_type }}",
+              "rightValue": "skip",
+              "operator": { "type": "string", "operation": "notEquals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a6000001-0006-0006-0006-000000000006",
+      "name": "IF — Touch Due?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1440, 300]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst id = item.id || '';\nconst fields = item.fields || {};\nconst lastActivitySafe = fields.last_activity_at || '2000-01-01T00:00:00.000Z';\nconst noResponseCount = parseInt(fields.no_response_count || '0', 10);\n\nconst companyRecord = {\n  id: id,\n  fields: {\n    company_name: fields.company_name || '',\n    contact_name: fields.contact_name || '',\n    whatsapp_number: String(fields.whatsapp_number || ''),\n    sector: fields.sector || '',\n    conversation_stage: item.touch_type,\n    team_size: fields.team_size || null,\n    main_challenge: fields.main_challenge || null,\n    priority_process: fields.priority_process || null,\n    urgency_level: fields.urgency_level || null,\n    qualification_score: parseInt(fields.qualification_score || '0', 10)\n  }\n};\n\nconst inboundFormula = \"AND(FIND('\" + id + \"', ARRAYJOIN({company})) > 0, {type} = 'inbound', IS_AFTER({timestamp}, '\" + lastActivitySafe + \"'))\";\n\nreturn [{\n  json: {\n    company_record: companyRecord,\n    incoming_message: item.touch_type,\n    _company_id: id,\n    _whatsapp_number: String(fields.whatsapp_number || ''),\n    _last_activity_at: lastActivitySafe,\n    _no_response_count: noResponseCount,\n    _contact_name: fields.contact_name || '',\n    _inbound_formula: inboundFormula\n  }\n}];"
+      },
+      "id": "a6000001-0006-0006-0006-000000000007",
+      "name": "Code — Build Qualify Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.FASTAPI_BASE_URL }}/qualify",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "company_record",
+              "value": "={{ $json.company_record }}"
+            },
+            {
+              "name": "incoming_message",
+              "value": "={{ $json.incoming_message }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": { "responseFormat": "json" }
+          }
+        }
+      },
+      "id": "a6000001-0006-0006-0006-000000000008",
+      "name": "HTTP — POST /qualify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1920, 300]
+    },
+
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f-reply-text",
+              "name": "reply_text",
+              "value": "={{ $json.reply_text ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-new-state",
+              "name": "new_state",
+              "value": "={{ $json.new_state ?? 'nurture' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-new-stage",
+              "name": "new_stage",
+              "value": "={{ $json.new_stage ?? 'nurture' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-company-id",
+              "name": "company_id",
+              "value": "={{ $('Code — Build Qualify Payload').first().json._company_id }}",
+              "type": "string"
+            },
+            {
+              "id": "f-whatsapp",
+              "name": "whatsapp_number",
+              "value": "={{ $('Code — Build Qualify Payload').first().json._whatsapp_number }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a6000001-0006-0006-0006-000000000009",
+      "name": "Set — Parse Bot Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [2160, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.EVOLUTION_API_URL }}/message/sendText/{{ $vars.EVOLUTION_INSTANCE }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $vars.EVOLUTION_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $json.whatsapp_number }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.reply_text }}"
+            },
+            {
+              "name": "delay",
+              "value": "=1500"
+            }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "a6000001-0006-0006-0006-000000000010",
+      "name": "HTTP — Evolution API Send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2400, 300]
+    },
+
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "interactions",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "company": "={{ [$('Set — Parse Bot Response').first().json.company_id] }}",
+            "type": "nurture",
+            "agent": "bot",
+            "message_text": "={{ $('Set — Parse Bot Response').first().json.reply_text }}",
+            "timestamp": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a6000001-0006-0006-0006-000000000011",
+      "name": "Airtable — Log Outbound",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [2640, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.airtable.com/v0/{{ $vars.AIRTABLE_BASE_ID }}/interactions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.AIRTABLE_API_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "filterByFormula",
+              "value": "={{ $('Code — Build Qualify Payload').first().json._inbound_formula }}"
+            },
+            {
+              "name": "maxRecords",
+              "value": "5"
+            },
+            {
+              "name": "fields[]",
+              "value": "type"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": { "responseFormat": "json" }
+          }
+        }
+      },
+      "id": "a6000001-0006-0006-0006-000000000012",
+      "name": "HTTP — Get Inbound Replies",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2880, 300]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const repliesResponse = $input.first().json;\nconst buildPayload = $('Code — Build Qualify Payload').first().json;\n\nconst records = repliesResponse.records || [];\nconst hadReply = records.length > 0;\nconst currentCount = buildPayload._no_response_count || 0;\nconst newCount = hadReply ? 0 : currentCount + 1;\nconst newState = (!hadReply && newCount >= 3) ? 'inactive' : 'nurture';\nconst newStage = newState === 'inactive' ? 'inactive' : 'nurture';\n\nreturn [{\n  json: {\n    company_id: buildPayload._company_id,\n    had_reply: hadReply,\n    no_response_count: newCount,\n    new_state: newState,\n    new_stage: newStage\n  }\n}];"
+      },
+      "id": "a6000001-0006-0006-0006-000000000013",
+      "name": "Code — Evaluate Engagement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3120, 300]
+    },
+
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "companies",
+          "mode": "name"
+        },
+        "id": "={{ $json.company_id }}",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "state": "={{ $json.new_state }}",
+            "conversation_stage": "={{ $json.new_stage }}",
+            "no_response_count": "={{ $json.no_response_count }}",
+            "last_activity_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": ["id"],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a6000001-0006-0006-0006-000000000014",
+      "name": "Airtable — Update Company",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [3360, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+
+    {
+      "parameters": {},
+      "id": "a6000001-0006-0006-0006-000000000015",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 700]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.N8N_WEBHOOK_BASE_URL + '/webhook/error-handler' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "workflow_name", "value": "06 — Nurture Sequence" },
+            { "name": "node_name",     "value": "={{ $json.execution?.lastNodeExecuted ?? 'unknown' }}" },
+            { "name": "error_message", "value": "={{ $json.error?.message ?? $json.message ?? 'unknown error' }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a6000001-0006-0006-0006-000000000016",
+      "name": "Forward to Workflow 05",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [480, 700]
+    }
+
+  ],
+
+  "connections": {
+    "Schedule — 09:30 WAT Mon–Fri": {
+      "main": [[{ "node": "Airtable — Get Nurture Companies", "type": "main", "index": 0 }]]
+    },
+    "Airtable — Get Nurture Companies": {
+      "main": [[{ "node": "Code — Split Records", "type": "main", "index": 0 }]]
+    },
+    "Code — Split Records": {
+      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
+    },
+    "Split in Batches": {
+      "main": [
+        [{ "node": "Code — Determine Touch Type", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Code — Determine Touch Type": {
+      "main": [[{ "node": "IF — Touch Due?", "type": "main", "index": 0 }]]
+    },
+    "IF — Touch Due?": {
+      "main": [
+        [{ "node": "Code — Build Qualify Payload", "type": "main", "index": 0 }],
+        [{ "node": "Split in Batches",             "type": "main", "index": 0 }]
+      ]
+    },
+    "Code — Build Qualify Payload": {
+      "main": [[{ "node": "HTTP — POST /qualify", "type": "main", "index": 0 }]]
+    },
+    "HTTP — POST /qualify": {
+      "main": [[{ "node": "Set — Parse Bot Response", "type": "main", "index": 0 }]]
+    },
+    "Set — Parse Bot Response": {
+      "main": [[{ "node": "HTTP — Evolution API Send", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Evolution API Send": {
+      "main": [[{ "node": "Airtable — Log Outbound", "type": "main", "index": 0 }]]
+    },
+    "Airtable — Log Outbound": {
+      "main": [[{ "node": "HTTP — Get Inbound Replies", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Get Inbound Replies": {
+      "main": [[{ "node": "Code — Evaluate Engagement", "type": "main", "index": 0 }]]
+    },
+    "Code — Evaluate Engagement": {
+      "main": [[{ "node": "Airtable — Update Company", "type": "main", "index": 0 }]]
+    },
+    "Airtable — Update Company": {
+      "main": [[{ "node": "Split in Batches", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Forward to Workflow 05", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "id": "wf-bmst-06-nurture-sequence"
+}

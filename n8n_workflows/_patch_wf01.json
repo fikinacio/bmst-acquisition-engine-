@@ -1,0 +1,163 @@
+{
+  "name": "01 — Inbound Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "inbound",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Webhook — Receive Lead",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "field-company",
+              "name": "company_name",
+              "value": "={{ ($json.body.company_name ?? $json.company_name ?? '').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "field-name",
+              "name": "contact_name",
+              "value": "={{ $json.body.contact_name ?? $json.contact_name ?? $json.body.name ?? $json.name ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-sector",
+              "name": "sector",
+              "value": "={{ $json.body.sector ?? $json.sector ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-whatsapp",
+              "name": "whatsapp_number",
+              "value": "={{ ($json.body.whatsapp_number ?? $json.whatsapp_number ?? '').replace(/\\D/g, '') }}",
+              "type": "string"
+            },
+            {
+              "id": "field-source",
+              "name": "source",
+              "value": "={{ $json.body.source ?? $json.source ?? 'landing_page' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000002",
+      "name": "Set — Normalise Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "appFWSWvTMzFYJCAv",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblpED6NVZ8gViriH",
+          "mode": "id"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ ($json.body?.company_name ?? $json.company_name ?? '').trim() }}",
+            "contact_name": "={{ $json.body?.contact_name ?? $json.contact_name ?? '' }}",
+            "sector": "={{ $json.body?.sector ?? $json.sector ?? '' }}",
+            "whatsapp_number": "={{ ($json.body?.whatsapp_number ?? $json.whatsapp_number ?? '').replace(/\\D/g,'') }}",
+            "source": "={{ $json.body?.source ?? $json.source ?? 'landing_page' }}",
+            "state": "prospect",
+            "priority": "medium",
+            "qualification_score": 0,
+            "no_response_count": 0,
+            "last_activity_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000006",
+      "name": "Airtable — Create Company",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "m0Dui4tT90iB390g",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "",
+        "options": { "responseCode": 200 }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000007",
+      "name": "Respond — 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {},
+      "id": "a1b2c3d4-0001-0001-0001-000000000008",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 520]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.n8n.biscaplus.com/webhook/error-handler",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "workflow_name", "value": "01 — Inbound Webhook" },
+            { "name": "node_name", "value": "={{ $json.execution.lastNodeExecuted }}" },
+            { "name": "error_message", "value": "={{ $json.error.message }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000009",
+      "name": "Forward to Workflow 05",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 520]
+    }
+  ],
+  "connections": {
+    "Webhook — Receive Lead": {
+      "main": [[{ "node": "Set — Normalise Payload", "type": "main", "index": 0 }]]
+    },
+    "Set — Normalise Payload": {
+      "main": [[{ "node": "Airtable — Create Company", "type": "main", "index": 0 }]]
+    },
+    "Airtable — Create Company": {
+      "main": [[{ "node": "Respond — 200 OK", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Forward to Workflow 05", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

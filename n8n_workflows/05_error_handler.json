@@ -1,0 +1,218 @@
+{
+  "name": "05 — Error Handler",
+
+  "nodes": [
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "error-handler",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a5000001-0005-0005-0005-000000000001",
+      "name": "Webhook — Receive Error",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f-workflow",
+              "name": "workflow_name",
+              "value": "={{ $json.body?.workflow_name ?? $json.workflow_name ?? 'unknown workflow' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-node",
+              "name": "node_name",
+              "value": "={{ $json.body?.node_name ?? $json.node_name ?? 'unknown node' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-error",
+              "name": "error_message",
+              "value": "={{ $json.body?.error_message ?? $json.error_message ?? $json.message ?? 'unknown error' }}",
+              "type": "string"
+            },
+            {
+              "id": "f-timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a5000001-0005-0005-0005-000000000002",
+      "name": "Set — Format Error Details",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [480, 300]
+    },
+
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "errors",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "workflow_name": "={{ $json.workflow_name }}",
+            "node_name":     "={{ $json.node_name }}",
+            "error_message": "={{ $json.error_message }}",
+            "timestamp":     "={{ $json.timestamp }}",
+            "resolved":      false
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a5000001-0005-0005-0005-000000000003",
+      "name": "Airtable — Log Error",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [720, 300],
+      "continueOnFail": true,
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ '*BMST — Erro de Workflow* :rotating_light:\\n\\n*Workflow:* ' + $('Set — Format Error Details').first().json.workflow_name + '\\n*Node:* ' + $('Set — Format Error Details').first().json.node_name + '\\n*Erro:* ' + $('Set — Format Error Details').first().json.error_message + '\\n*Timestamp:* ' + $('Set — Format Error Details').first().json.timestamp + '\\n*Notificar:* ' + $vars.NOTIFICATION_EMAIL }}"
+            }
+          ]
+        },
+        "options": { "timeout": 10000 }
+      },
+      "id": "a5000001-0005-0005-0005-000000000004",
+      "name": "HTTP — Slack Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [960, 300],
+      "continueOnFail": true
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-evolution-fail",
+              "leftValue": "={{ $('Set — Format Error Details').first().json.node_name }}",
+              "rightValue": "Evolution",
+              "operator": { "type": "string", "operation": "contains" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a5000001-0005-0005-0005-000000000005",
+      "name": "IF — Evolution API Failure?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 30,
+        "unit": "minutes",
+        "options": {}
+      },
+      "id": "a5000001-0005-0005-0005-000000000006",
+      "name": "Wait — 30 Minutes",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1440, 300],
+      "webhookId": "bmst-wait-evolution-retry"
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ '*BMST — Retry Necessário* :arrows_counterclockwise:\\n\\nO envio via Evolution API (WhatsApp) falhou há 30 minutos e não foi recuperado automaticamente.\\n\\n*Workflow:* ' + $('Set — Format Error Details').first().json.workflow_name + '\\n*Erro:* ' + $('Set — Format Error Details').first().json.error_message + '\\n\\nPor favor verifique o estado da Evolution API e reenvie a mensagem manualmente.\\nContacto de suporte: ' + $vars.NOTIFICATION_EMAIL }}"
+            }
+          ]
+        },
+        "options": { "timeout": 10000 }
+      },
+      "id": "a5000001-0005-0005-0005-000000000007",
+      "name": "HTTP — Slack Retry Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1680, 300],
+      "continueOnFail": true
+    }
+
+  ],
+
+  "connections": {
+    "Webhook — Receive Error": {
+      "main": [[{ "node": "Set — Format Error Details", "type": "main", "index": 0 }]]
+    },
+    "Set — Format Error Details": {
+      "main": [[{ "node": "Airtable — Log Error", "type": "main", "index": 0 }]]
+    },
+    "Airtable — Log Error": {
+      "main": [[{ "node": "HTTP — Slack Notification", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Slack Notification": {
+      "main": [[{ "node": "IF — Evolution API Failure?", "type": "main", "index": 0 }]]
+    },
+    "IF — Evolution API Failure?": {
+      "main": [
+        [{ "node": "Wait — 30 Minutes",       "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Wait — 30 Minutes": {
+      "main": [[{ "node": "HTTP — Slack Retry Alert", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "id": "wf-bmst-05-error-handler"
+}

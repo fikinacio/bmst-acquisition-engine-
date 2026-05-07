@@ -1,0 +1,262 @@
+{
+  "name": "01 — Inbound Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "inbound",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Webhook — Receive Lead",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "field-name",
+              "name": "name",
+              "value": "={{ $json.body.name ?? $json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "field-company",
+              "name": "company_name",
+              "value": "={{ ($json.body.company_name ?? $json.company_name ?? '').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "field-sector",
+              "name": "sector",
+              "value": "={{ $json.body.sector ?? $json.sector }}",
+              "type": "string"
+            },
+            {
+              "id": "field-whatsapp",
+              "name": "whatsapp_number",
+              "value": "={{ ($json.body.whatsapp_number ?? $json.whatsapp_number ?? '').replace(/\\D/g, '') }}",
+              "type": "string"
+            },
+            {
+              "id": "field-source",
+              "name": "source",
+              "value": "={{ $json.body.source ?? $json.source ?? 'landing_page' }}",
+              "type": "string"
+            },
+            {
+              "id": "field-submitted",
+              "name": "submitted_at",
+              "value": "={{ $json.body.submitted_at ?? $json.submitted_at ?? $now }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000002",
+      "name": "Set — Normalise Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "companies",
+          "mode": "name"
+        },
+        "filterByFormula": "={{ \"AND({Name}='\" + $json.company_name.replace(\"'\", \"\\\\'\") + \"', {Name}!='')\" }}",
+        "options": {
+          "fields": ["Name", "state", "priority"]
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000003",
+      "name": "Airtable — Lookup Company",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-exists",
+              "leftValue": "={{ $json.records?.length ?? 0 }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000004",
+      "name": "IF — Company Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "companies",
+          "mode": "name"
+        },
+        "id": "={{ $('Airtable — Lookup Company').first().json.records[0].id }}",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "state": "lead",
+            "priority": "high",
+            "last_activity_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": ["id"],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000005",
+      "name": "Airtable — Update Existing Company",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [1120, 180],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "={{ $vars.AIRTABLE_BASE_ID }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "companies",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $('Set — Normalise Payload').first().json.company_name }}",
+            "sector": "={{ $('Set — Normalise Payload').first().json.sector }}",
+            "state": "prospect",
+            "priority": "medium",
+            "contact_name": "={{ $('Set — Normalise Payload').first().json.name }}",
+            "whatsapp_number": "={{ $('Set — Normalise Payload').first().json.whatsapp_number }}",
+            "source": "={{ $('Set — Normalise Payload').first().json.source }}",
+            "last_activity_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000006",
+      "name": "Airtable — Create New Company",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [1120, 420],
+      "credentials": {
+        "airtableTokenApi": { "id": "airtable-cred", "name": "Airtable (BMST)" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "",
+        "options": { "responseCode": 200 }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000007",
+      "name": "Respond — 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {},
+      "id": "a1b2c3d4-0001-0001-0001-000000000008",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 520]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.N8N_WEBHOOK_BASE_URL + '/webhook/error-handler' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "workflow_name", "value": "01 — Inbound Webhook" },
+            { "name": "node_name", "value": "={{ $json.execution.lastNodeExecuted }}" },
+            { "name": "error_message", "value": "={{ $json.error.message }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000009",
+      "name": "Forward to Workflow 05",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [460, 520]
+    }
+  ],
+  "connections": {
+    "Webhook — Receive Lead": {
+      "main": [[{ "node": "Set — Normalise Payload", "type": "main", "index": 0 }]]
+    },
+    "Set — Normalise Payload": {
+      "main": [[{ "node": "Airtable — Lookup Company", "type": "main", "index": 0 }]]
+    },
+    "Airtable — Lookup Company": {
+      "main": [[{ "node": "IF — Company Exists?", "type": "main", "index": 0 }]]
+    },
+    "IF — Company Exists?": {
+      "main": [
+        [{ "node": "Airtable — Update Existing Company", "type": "main", "index": 0 }],
+        [{ "node": "Airtable — Create New Company",     "type": "main", "index": 0 }]
+      ]
+    },
+    "Airtable — Update Existing Company": {
+      "main": [[{ "node": "Respond — 200 OK", "type": "main", "index": 0 }]]
+    },
+    "Airtable — Create New Company": {
+      "main": [[{ "node": "Respond — 200 OK", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Forward to Workflow 05", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "id": "wf-bmst-01-inbound"
+}
