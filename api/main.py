@@ -53,6 +53,19 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/debug-env")
+def debug_env():
+    import os
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    return {
+        "ANTHROPIC_API_KEY_set": bool(key),
+        "ANTHROPIC_API_KEY_len": len(key),
+        "ANTHROPIC_API_KEY_prefix": key[:12] if key else "",
+        "AIRTABLE_API_KEY_set": bool(os.environ.get("AIRTABLE_API_KEY")),
+        "EVOLUTION_API_URL": os.environ.get("EVOLUTION_API_URL", ""),
+    }
+
+
 @app.post("/qualify")
 def qualify(payload: QualifyRequest):
     """
