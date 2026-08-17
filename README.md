@@ -144,5 +144,3 @@ Key variables by component:
 | FastAPI | `API_HOST`, `API_PORT` |
 
 ---
-
-*BMST · Bisca Mais Sistemas e Tecnologias · contact@biscaplus.com*
